@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum OrderStatus {
+  PENDIENTE
+  CONFIRMADO
+  PREPARANDO
+  ENVIADO
+  ENTREGADO
+}
+
+enum ShippingType {
+  FIXED
+  FREE
+}
+
+enum PaymentMethod {
+  CASH_ON_DELIVERY
+}
+
+model Admin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  @@map("admins")
+}
+
+model Category {
+  id          String       @id @default(uuid())
+  name        String
+  slug        String       @unique
+  description String?
+  imageUrl    String?
+  status      EntityStatus @default(ACTIVE)
+  parentId    String?
+  parent      Category?    @relation("SubCategories", fields: [parentId], references: [id])
+  subCategories Category[] @relation("SubCategories")
+  createdAt   DateTime     @default(now())
+  products    Product[]
+
+  @@index([slug])
+  @@map("categories")
+}
+
+model Product {
+  id            String       @id @default(uuid())
+  name          String
+  slug          String       @unique
+  description   String
+  price         Decimal      @db.Decimal(10, 2)
+  previousPrice Decimal?     @db.Decimal(10, 2)
+  stock         Int          @default(0)
+  sku           String       @unique
+  imageUrl      String
+  status        EntityStatus @default(INACTIVE)
+  featured      Boolean      @default(false)
+  categoryId    String
+  category      Category     @relation(fields: [categoryId], references: [id])
+  createdAt     DateTime     @default(now())
+  orderItems    OrderItem[]
+
+  @@index([slug])
+  @@index([categoryId])
+  @@index([featured])
+  @@map("products")
+}
+
+model Order {
+  id            String        @id @default(uuid())
+  orderNumber   String        @unique
+  status        OrderStatus   @default(PENDIENTE)
+  subtotal      Decimal       @db.Decimal(10, 2)
+  shippingCost  Decimal       @db.Decimal(10, 2)
+  total         Decimal       @db.Decimal(10, 2)
+  paymentMethod PaymentMethod @default(CASH_ON_DELIVERY)
+
+  // Datos del cliente (snapshot)
+  customerName  String
+  customerPhone String
+  customerEmail String?
+
+  // Dirección de entrega
+  department    String
+  municipality  String
+  exactAddress  String
+  reference     String?
+
+  createdAt DateTime    @default(now())
+  items     OrderItem[]
+
+  @@index([status])
+  @@index([orderNumber])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String
+  order       Order   @relation(fields: [orderId], references: [id])
+  productId   String
+  product     Product @relation(fields: [productId], references: [id])
+  productName String  // snapshot del nombre al momento del pedido
+  unitPrice   Decimal @db.Decimal(10, 2) // snapshot del precio
+  quantity    Int
+
+  @@map("order_items")
+}
+
+model Setting {
+  id               String       @id @default(uuid())
+  storeName        String       @default("E-COMMERCE")
+  shippingType     ShippingType @default(FIXED)
+  shippingAmount   Decimal      @default(30) @db.Decimal(10, 2)
+  bannerImageUrl   String?
+  bannerText       String?
+  bannerLinkUrl    String?
+  
+  quickLinksActive Boolean      @default(true)
+  quickLinks       Json?
+
+  @@map("settings")
+}
+
+model BannerSlide {
+  id        String   @id @default(uuid())
+  imageUrl  String
+  text      String?
+  linkUrl   String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("banner_slides")
+}
