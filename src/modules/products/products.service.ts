@@ -32,7 +32,15 @@ export async function listActive(filters: { categorySlug?: string; search?: stri
     where: {
       status: EntityStatus.ACTIVE,
       ...(categoryIds && { categoryId: { in: categoryIds } }),
-      ...(filters.search && { name: { contains: filters.search, mode: 'insensitive' } }),
+      ...(filters.search && {
+        OR: [
+          { name: { contains: filters.search, mode: 'insensitive' } },
+          { description: { contains: filters.search, mode: 'insensitive' } },
+          // Búsqueda aproximada básica (quita 's' o 'es' finales para atrapar singulares/plurales)
+          { name: { contains: filters.search.replace(/s$/i, ''), mode: 'insensitive' } },
+          { name: { contains: filters.search.replace(/es$/i, ''), mode: 'insensitive' } }
+        ]
+      }),
     },
     include: { category: { select: { id: true, name: true, slug: true } } },
     orderBy: { createdAt: 'desc' },
@@ -75,7 +83,7 @@ export async function getById(id: string) {
 export async function create(data: {
   name: string; slug?: string; description: string
   price: number; previousPrice?: number; stock: number
-  sku: string; imageUrl: string; categoryId: string
+  sku: string; imageUrl: string; images?: string[]; categoryId: string
 }) {
   const slug = data.slug || data.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
   return prisma.product.create({ data: { ...data, slug } })
@@ -84,7 +92,7 @@ export async function create(data: {
 export async function update(id: string, data: Partial<{
   name: string; slug: string; description: string
   price: number; previousPrice: number; stock: number
-  sku: string; imageUrl: string; categoryId: string
+  sku: string; imageUrl: string; images: string[]; categoryId: string
 }>) {
   return prisma.product.update({ where: { id }, data })
 }

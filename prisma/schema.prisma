@@ -1,10 +1,12 @@
 generator client {
   provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pg_trgm]
 }
 
 enum EntityStatus {
@@ -65,6 +67,7 @@ model Product {
   stock         Int          @default(0)
   sku           String       @unique
   imageUrl      String
+  images        String[]     @default([])
   status        EntityStatus @default(INACTIVE)
   featured      Boolean      @default(false)
   categoryId    String
