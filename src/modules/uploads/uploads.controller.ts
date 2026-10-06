@@ -7,7 +7,8 @@ export async function upload(req: Request, res: Response, next: NextFunction) {
       res.status(400).json({ message: 'No se recibió ningún archivo' })
       return
     }
-    const url = await uploadImage(req.file.buffer)
+    const isLogo = req.body.kind === 'logo'
+    const url = await uploadImage(req.file.buffer, isLogo ? 'ecommerce/logos' : 'ecommerce', isLogo)
     res.json({ url })
   } catch (err) { next(err) }
 }

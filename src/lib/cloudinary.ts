@@ -9,13 +9,13 @@ cloudinary.config({
 /**
  * Sube un archivo a Cloudinary y retorna la URL pública (T-016).
  */
-export async function uploadImage(fileBuffer: Buffer, folder = 'ecommerce'): Promise<string> {
+export async function uploadImage(fileBuffer: Buffer, folder = 'ecommerce', preserveAspect = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       { 
         folder, 
         resource_type: 'image',
-        transformation: [
+        transformation: preserveAspect ? undefined : [
           // Fuerza proporción 1:1, fondo blanco para espacios sobrantes, 1080x1080
           { width: 1080, height: 1080, crop: 'pad', background: 'white' },
           // Optimización automática de peso y formato (WebP/AVIF)

@@ -49,6 +49,22 @@ export async function updateStoreName(storeName: string) {
   })
 }
 
+export async function updateLogo(logoUrl: string) {
+  const settings = await getSettings()
+  return prisma.setting.update({
+    where: { id: settings.id },
+    data: { logoUrl: logoUrl || null },
+  })
+}
+
+export async function updateMetaPixel(metaPixelId: string) {
+  const settings = await getSettings()
+  return prisma.setting.update({
+    where: { id: settings.id },
+    data: { metaPixelId: metaPixelId || null },
+  })
+}
+
 export async function updateQuickLinks(data: { active: boolean, links: any[] }) {
   const settings = await getSettings()
   return prisma.setting.update({
