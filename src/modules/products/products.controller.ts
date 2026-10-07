@@ -3,10 +3,12 @@ import * as productsService from './products.service'
 
 export async function listActive(req: Request, res: Response, next: NextFunction) {
   try {
-    const { category, search } = req.query
+    const { category, search, ids } = req.query
+    const idsArray = typeof ids === 'string' ? ids.split(',').map((id) => id.trim()).filter(Boolean) : undefined
     const products = await productsService.listActive({
       categorySlug: category as string | undefined,
       search: search as string | undefined,
+      ids: idsArray,
     })
     res.json(products)
   } catch (err) { next(err) }
@@ -14,7 +16,7 @@ export async function listActive(req: Request, res: Response, next: NextFunction
 
 export async function getBySlug(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await productsService.getBySlug(req.params.slug)
+    const product = await productsService.getBySlug(req.params.slug as string)
     res.json(product)
   } catch (err) { next(err) }
 }
@@ -35,35 +37,35 @@ export async function create(req: Request, res: Response, next: NextFunction) {
 
 export async function update(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await productsService.update(req.params.id, req.body)
+    const product = await productsService.update(req.params.id as string, req.body)
     res.json(product)
   } catch (err) { next(err) }
 }
 
 export async function toggleStatus(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await productsService.toggleStatus(req.params.id)
+    const product = await productsService.toggleStatus(req.params.id as string)
     res.json(product)
   } catch (err) { next(err) }
 }
 
 export async function updateStock(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await productsService.updateStock(req.params.id, req.body.stock)
+    const product = await productsService.updateStock(req.params.id as string, req.body.stock)
     res.json(product)
   } catch (err) { next(err) }
 }
 
 export async function toggleFeatured(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await productsService.toggleFeatured(req.params.id)
+    const product = await productsService.toggleFeatured(req.params.id as string)
     res.json(product)
   } catch (err) { next(err) }
 }
 
 export async function remove(req: Request, res: Response, next: NextFunction) {
   try {
-    await productsService.remove(req.params.id)
+    await productsService.remove(req.params.id as string)
     res.status(204).send()
   } catch (err) { next(err) }
 }

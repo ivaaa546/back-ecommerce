@@ -1,22 +1,19 @@
 import { prisma } from '../../lib/prisma'
 import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
+import { AppError } from '../../lib/errors'
 
 export async function login(email: string, password: string) {
   const admin = await prisma.admin.findUnique({ where: { email } })
 
   if (!admin) {
-    const error = new Error('Credenciales inválidas') as Error & { statusCode: number }
-    error.statusCode = 401
-    throw error
+    throw AppError.unauthorized('Credenciales inválidas')
   }
 
   const valid = await bcrypt.compare(password, admin.passwordHash)
 
   if (!valid) {
-    const error = new Error('Credenciales inválidas') as Error & { statusCode: number }
-    error.statusCode = 401
-    throw error
+    throw AppError.unauthorized('Credenciales inválidas')
   }
 
   const secret = process.env.JWT_SECRET!

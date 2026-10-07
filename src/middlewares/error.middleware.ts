@@ -1,19 +1,17 @@
 import { Request, Response, NextFunction } from 'express'
-
-interface AppError extends Error {
-  statusCode?: number
-}
+import { sanitizeError } from '../lib/errors'
 
 export function errorMiddleware(
-  err: AppError,
+  err: unknown,
   _req: Request,
   res: Response,
   _next: NextFunction
 ): void {
-  const statusCode = err.statusCode ?? 500
-  const message = err.message ?? 'Error interno del servidor'
+  const { statusCode, body } = sanitizeError(err)
 
-  console.error(`[ERROR] ${statusCode} - ${message}`)
+  // Log interno para depuración segura del servidor
+  const logMessage = err instanceof Error ? err.message : String(err)
+  console.error(`[ERROR] ${statusCode} (${body.code}) - ${logMessage}`)
 
-  res.status(statusCode).json({ message })
+  res.status(statusCode).json(body)
 }

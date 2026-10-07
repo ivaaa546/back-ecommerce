@@ -57,6 +57,14 @@ export async function updateLogo(logoUrl: string) {
   })
 }
 
+export async function updateFooter(data: { tagline: string; copyright: string }) {
+  const settings = await getSettings()
+  return prisma.setting.update({
+    where: { id: settings.id },
+    data: { footerTagline: data.tagline || null, footerCopyright: data.copyright || null },
+  })
+}
+
 export async function updateMetaPixel(metaPixelId: string) {
   const settings = await getSettings()
   return prisma.setting.update({

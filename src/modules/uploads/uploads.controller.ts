@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from 'express'
 import { uploadImage } from '../../lib/cloudinary'
+import { AppError } from '../../lib/errors'
 
 export async function upload(req: Request, res: Response, next: NextFunction) {
   try {
     if (!req.file) {
-      res.status(400).json({ message: 'No se recibió ningún archivo' })
-      return
+      throw AppError.badRequest('No se recibió ningún archivo')
     }
     const isLogo = req.body.kind === 'logo'
     const url = await uploadImage(req.file.buffer, isLogo ? 'ecommerce/logos' : 'ecommerce', isLogo)

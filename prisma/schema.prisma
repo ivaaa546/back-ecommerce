@@ -126,6 +126,8 @@ model Setting {
   id               String       @id @default(uuid())
   storeName        String       @default("E-COMMERCE")
   logoUrl          String?
+  footerTagline    String?      @default("Tu tienda de confianza con pago contra entrega en toda Guatemala.")
+  footerCopyright  String?      @default("Todos los derechos reservados. Pago contra entrega garantizado.")
   shippingType     ShippingType @default(FIXED)
   shippingAmount   Decimal      @default(30) @db.Decimal(10, 2)
   bannerImageUrl   String?

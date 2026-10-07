@@ -1,4 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary'
+import { AppError } from './errors'
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -24,7 +25,8 @@ export async function uploadImage(fileBuffer: Buffer, folder = 'ecommerce', pres
       },
       (error, result) => {
         if (error || !result) {
-          reject(new Error(error?.message ?? 'Error al subir imagen a Cloudinary'))
+          console.error('[Cloudinary upload failed]:', error?.message)
+          reject(AppError.externalService('Error al procesar la imagen con el servicio de almacenamiento'))
           return
         }
         resolve(result.secure_url)

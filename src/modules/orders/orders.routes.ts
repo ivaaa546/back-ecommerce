@@ -3,11 +3,11 @@ import * as ctrl from './orders.controller'
 import { authMiddleware } from '../../middlewares/auth.middleware'
 
 // Ruta pública
-export const ordersRouter = Router()
+export const ordersRouter: Router = Router()
 ordersRouter.post('/', ctrl.createOrder)
 
 // Rutas admin
-export const ordersAdminRouter = Router()
+export const ordersAdminRouter: Router = Router()
 ordersAdminRouter.use(authMiddleware)
 ordersAdminRouter.get('/', ctrl.listAll)
 ordersAdminRouter.get('/:id', ctrl.getById)

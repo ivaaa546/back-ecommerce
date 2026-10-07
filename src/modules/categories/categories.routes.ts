@@ -2,13 +2,13 @@ import { Router } from 'express'
 import * as ctrl from './categories.controller'
 import { authMiddleware } from '../../middlewares/auth.middleware'
 
-export const categoriesRouter = Router({ mergeParams: true })
+export const categoriesRouter: Router = Router({ mergeParams: true })
 
 // Rutas públicas
 categoriesRouter.get('/', ctrl.listActive)
 
 // Rutas admin (protegidas)
-const adminRouter = Router()
+const adminRouter: Router = Router()
 adminRouter.use(authMiddleware)
 adminRouter.get('/', ctrl.listAll)
 adminRouter.post('/', ctrl.create)

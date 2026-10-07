@@ -1,22 +1,13 @@
 import { Request, Response, NextFunction } from 'express'
 import * as ordersService from './orders.service'
+import { validateCreateOrderPayload } from './orders.validation'
 import { OrderStatus } from '../../types/domain'
 
 export async function createOrder(req: Request, res: Response, next: NextFunction) {
   try {
-    const { customer, address, items, paymentMethod } = req.body
-    if (!customer?.fullName || !customer?.phone || !address?.department || !items?.length) {
-      res.status(400).json({ message: 'Datos del pedido incompletos' })
-      return
-    }
-    const order = await ordersService.createOrder({ customer, address, items, paymentMethod })
-    res.status(201).json({
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      total: order.total,
-      shippingCost: order.shippingCost,
-      status: order.status,
-    })
+    const validatedData = validateCreateOrderPayload(req.body)
+    const order = await ordersService.createOrder(validatedData)
+    res.status(201).json(order)
   } catch (err) { next(err) }
 }
 
@@ -32,14 +23,14 @@ export async function listAll(req: Request, res: Response, next: NextFunction) {
 
 export async function getById(req: Request, res: Response, next: NextFunction) {
   try {
-    const order = await ordersService.getById(req.params.id)
+    const order = await ordersService.getById(req.params.id as string)
     res.json(order)
   } catch (err) { next(err) }
 }
 
 export async function advanceStatus(req: Request, res: Response, next: NextFunction) {
   try {
-    const order = await ordersService.advanceStatus(req.params.id, req.body.status)
+    const order = await ordersService.advanceStatus(req.params.id as string, req.body.status)
     res.json(order)
   } catch (err) { next(err) }
 }

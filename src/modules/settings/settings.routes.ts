@@ -2,14 +2,15 @@ import { Router } from 'express'
 import * as ctrl from './settings.controller'
 import { authMiddleware } from '../../middlewares/auth.middleware'
 
-export const settingsRouter = Router()
+export const settingsRouter: Router = Router()
 settingsRouter.get('/', ctrl.getSettings)
 
-export const settingsAdminRouter = Router()
+export const settingsAdminRouter: Router = Router()
 settingsAdminRouter.use(authMiddleware)
 settingsAdminRouter.put('/shipping', ctrl.updateShipping)
 settingsAdminRouter.put('/store-name', ctrl.updateStoreName)
 settingsAdminRouter.put('/logo', ctrl.updateLogo)
+settingsAdminRouter.put('/footer', ctrl.updateFooter)
 settingsAdminRouter.put('/meta-pixel', ctrl.updateMetaPixel)
 settingsAdminRouter.put('/quick-links', ctrl.updateQuickLinks)
 settingsAdminRouter.put('/banner', ctrl.updateBanner) // Legacy

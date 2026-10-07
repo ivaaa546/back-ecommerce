@@ -2,15 +2,18 @@
   "name": "back-ecommerce",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/src/server.js",
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "tsx --test --test-concurrency=1 \"src/**/*.test.ts\"",
+    "start": "node dist/src/server.js",
     "seed": "tsx prisma/seed.ts",
     "db:migrate": "prisma migrate dev",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "db:test:setup": "tsx scripts/setup-test-db.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

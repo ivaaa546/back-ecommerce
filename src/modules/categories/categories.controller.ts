@@ -28,7 +28,7 @@ export async function create(req: Request, res: Response, next: NextFunction) {
 // PUT /api/admin/categories/:id
 export async function update(req: Request, res: Response, next: NextFunction) {
   try {
-    const category = await categoriesService.update(req.params.id, req.body)
+    const category = await categoriesService.update(req.params.id as string, req.body)
     res.json(category)
   } catch (err) { next(err) }
 }
@@ -36,7 +36,7 @@ export async function update(req: Request, res: Response, next: NextFunction) {
 // PATCH /api/admin/categories/:id/status
 export async function toggleStatus(req: Request, res: Response, next: NextFunction) {
   try {
-    const category = await categoriesService.toggleStatus(req.params.id)
+    const category = await categoriesService.toggleStatus(req.params.id as string)
     res.json(category)
   } catch (err) { next(err) }
 }
@@ -44,7 +44,7 @@ export async function toggleStatus(req: Request, res: Response, next: NextFuncti
 // DELETE /api/admin/categories/:id
 export async function remove(req: Request, res: Response, next: NextFunction) {
   try {
-    await categoriesService.remove(req.params.id)
+    await categoriesService.remove(req.params.id as string)
     res.status(204).send()
   } catch (err) { next(err) }
 }

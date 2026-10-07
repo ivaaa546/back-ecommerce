@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import express from 'express'
+import express, { type Express } from 'express'
 import cors from 'cors'
 import { errorMiddleware } from './middlewares/error.middleware'
 
@@ -17,7 +17,7 @@ import { ordersAdminRouter } from './modules/orders/orders.routes'
 import { settingsAdminRouter } from './modules/settings/settings.routes'
 import { uploadsRouter } from './modules/uploads/uploads.routes'
 
-const app = express()
+const app: Express = express()
 
 app.use(cors())
 app.use(express.json())
