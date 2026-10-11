@@ -1,7 +1,13 @@
 import { prisma } from '../../lib/prisma'
 import { AppError } from '../../lib/errors'
 import { OrderStatus, ShippingType, PaymentMethod, EntityStatus } from '../../types/domain'
-import { canTransitionTo, calculateOrderTotals, consolidateOrderItems } from '../../types/domain.rules'
+import {
+  canTransitionTo,
+  calculateOrderTotals,
+  consolidateOrderItems,
+  canCancelOrder,
+  canReturnOrder,
+} from '../../types/domain.rules'
 import { AuthoritativeOrderResponse, AuthoritativeOrderItem } from '../../types/orders.contract'
 import { ValidatedOrderData } from './orders.validation'
 
@@ -55,9 +61,10 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
     const shippingCost = settings?.shippingType === ShippingType.FREE ? 0 : Number(settings?.shippingAmount ?? 30)
 
     // 2. Verificar existencia, estado activo y obtener snapshots de los productos
-    const productIds = consolidatedItems.map((i) => i.productId)
+    const productIds = Array.from(new Set(consolidatedItems.map((i) => i.productId)))
     const products = await tx.product.findMany({
       where: { id: { in: productIds } },
+      include: { variants: true },
     })
 
     if (products.length !== productIds.length) {
@@ -68,46 +75,119 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
 
     const productsMap = new Map(products.map((p) => [p.id, p]))
 
-    // Verificar que todos los productos estén activos (RN-018)
+    interface PreparedOrderItem {
+      productId: string
+      variantId?: string | null
+      productName: string
+      variantName?: string | null
+      sku: string
+      unitPrice: number
+      quantity: number
+    }
+
+    const preparedItems: PreparedOrderItem[] = []
+
+    // Verificar que todos los productos y variantes estén activos y tengan stock suficiente
     for (const item of consolidatedItems) {
       const prod = productsMap.get(item.productId)!
       if (prod.status !== EntityStatus.ACTIVE) {
         throw AppError.badRequest(`El producto "${prod.name}" no está disponible para la venta`)
       }
-      if (prod.stock < item.quantity) {
-        throw AppError.stockConflict(
-          `Stock insuficiente para "${prod.name}". Disponible: ${prod.stock}, Solicitado: ${item.quantity}`
-        )
+
+      if (item.variantId) {
+        const variant = prod.variants.find((v) => v.id === item.variantId)
+        if (!variant) {
+          throw AppError.notFound(`La variante seleccionada no existe para el producto "${prod.name}"`)
+        }
+        if (variant.status !== EntityStatus.ACTIVE) {
+          throw AppError.badRequest(`La variante "${variant.name}" de "${prod.name}" no está disponible para la venta`)
+        }
+        if (variant.stock < item.quantity) {
+          throw AppError.stockConflict(
+            `Stock insuficiente para "${prod.name} (${variant.name})". Disponible: ${variant.stock}, Solicitado: ${item.quantity}`
+          )
+        }
+
+        preparedItems.push({
+          productId: prod.id,
+          variantId: variant.id,
+          productName: `${prod.name} - ${variant.name}`,
+          variantName: variant.name,
+          sku: variant.sku,
+          unitPrice: Number(variant.price),
+          quantity: item.quantity,
+        })
+      } else {
+        // Producto simple: verificar si exige selección de variante obligatoria (RN-002)
+        const activeVariants = prod.variants.filter((v) => v.status === EntityStatus.ACTIVE)
+        if (activeVariants.length > 0) {
+          throw AppError.badRequest(`El producto "${prod.name}" requiere selección de variante`)
+        }
+
+        if (prod.stock < item.quantity) {
+          throw AppError.stockConflict(
+            `Stock insuficiente para "${prod.name}". Disponible: ${prod.stock}, Solicitado: ${item.quantity}`
+          )
+        }
+
+        preparedItems.push({
+          productId: prod.id,
+          variantId: null,
+          productName: prod.name,
+          variantName: null,
+          sku: prod.sku,
+          unitPrice: Number(prod.price),
+          quantity: item.quantity,
+        })
       }
     }
 
-    // 3. T-015, DT-002: Descuento atómico condicional de inventario dentro de la transacción
-    // Cada UPDATE solo afecta una fila si el stock actual en base de datos es >= cantidad solicitada.
-    for (const item of consolidatedItems) {
-      const affectedRows = await tx.$executeRaw`
-        UPDATE "products"
-        SET "stock" = "stock" - ${item.quantity}
-        WHERE "id" = ${item.productId}
-          AND "stock" >= ${item.quantity}
-          AND "status" = 'ACTIVE';
-      `
+    // 3. T-015, DT-002, DT-003: Descuento atómico condicional de inventario dentro de la transacción
+    // Ordenar determinísticamente por ID para prevenir deadlocks en transacciones concurrentes con múltiples ítems (Hallazgo 2)
+    const sortedItemsForUpdate = [...preparedItems].sort((a, b) => {
+      const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
+      const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
+      return keyA.localeCompare(keyB)
+    })
 
-      if (affectedRows === 0) {
-        const prod = productsMap.get(item.productId)!
-        throw AppError.stockConflict(
-          `Conflicto de inventario concurrente: stock insuficiente para "${prod.name}"`
-        )
+    // Cada UPDATE solo afecta una fila si el stock actual en base de datos es >= cantidad solicitada.
+    for (const item of sortedItemsForUpdate) {
+      if (item.variantId) {
+        const affectedRows = await tx.$executeRaw`
+          UPDATE "product_variants"
+          SET "stock" = "stock" - ${item.quantity}
+          WHERE "id" = ${item.variantId}
+            AND "stock" >= ${item.quantity}
+            AND "status" = 'ACTIVE';
+        `
+
+        if (affectedRows === 0) {
+          throw AppError.stockConflict(
+            `Conflicto de inventario concurrente: stock insuficiente para "${item.productName}"`
+          )
+        }
+      } else {
+        const affectedRows = await tx.$executeRaw`
+          UPDATE "products"
+          SET "stock" = "stock" - ${item.quantity}
+          WHERE "id" = ${item.productId}
+            AND "stock" >= ${item.quantity}
+            AND "status" = 'ACTIVE';
+        `
+
+        if (affectedRows === 0) {
+          throw AppError.stockConflict(
+            `Conflicto de inventario concurrente: stock insuficiente para "${item.productName}"`
+          )
+        }
       }
     }
 
     // 4. Calcular importes autoritativos de servidor con precisión monetaria (T-006, DT-005)
-    const itemsForCalculation = consolidatedItems.map((item) => {
-      const prod = productsMap.get(item.productId)!
-      return {
-        unitPrice: Number(prod.price),
-        quantity: item.quantity,
-      }
-    })
+    const itemsForCalculation = preparedItems.map((item) => ({
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+    }))
 
     const { subtotal, total } = calculateOrderTotals(itemsForCalculation, shippingCost)
 
@@ -131,15 +211,15 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
         exactAddress: data.address.exactAddress,
         reference: data.address.reference,
         items: {
-          create: consolidatedItems.map((item) => {
-            const prod = productsMap.get(item.productId)!
-            return {
-              productId: prod.id,
-              productName: prod.name,
-              unitPrice: prod.price,
-              quantity: item.quantity,
-            }
-          }),
+          create: preparedItems.map((item) => ({
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            productName: item.productName,
+            variantName: item.variantName ?? null,
+            sku: item.sku,
+            unitPrice: item.unitPrice,
+            quantity: item.quantity,
+          })),
         },
       },
       include: { items: true },
@@ -148,7 +228,10 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
     // 7. Retornar contrato autoritativo completo (T-008)
     const responseItems: AuthoritativeOrderItem[] = createdOrder.items.map((i) => ({
       productId: i.productId,
+      variantId: i.variantId,
       productName: i.productName,
+      variantName: i.variantName,
+      sku: i.sku,
       quantity: i.quantity,
       unitPrice: Number(i.unitPrice),
       lineTotal: Number(i.unitPrice) * i.quantity,
@@ -192,7 +275,149 @@ export async function getById(id: string) {
   return order
 }
 
-export async function advanceStatus(id: string, newStatus: OrderStatus) {
+// Gestión de Cancelaciones y Devoluciones con reposición atómica de stock
+export async function cancelOrder(id: string, reason: string, actor: string = 'ADMIN') {
+  const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'Cancelación de pedido'
+  const cleanActor = typeof actor === 'string' && actor.trim() ? actor.trim() : 'ADMIN'
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.order.findUnique({ where: { id }, include: { items: true } })
+    if (!existing) {
+      throw AppError.notFound('Pedido no encontrado')
+    }
+
+    if (existing.status === OrderStatus.CANCELADO) {
+      throw AppError.conflict('El pedido ya ha sido cancelado previamente')
+    }
+
+    if (!canCancelOrder(existing.status as OrderStatus)) {
+      throw AppError.badRequest(
+        `No es posible cancelar un pedido en estado "${existing.status}". Solo se permite cancelar pedidos antes de su despacho.`
+      )
+    }
+
+    // Actualización atómica condicional para evitar doble cancelación / concurrencia
+    const affected = await tx.$executeRaw`
+      UPDATE "orders"
+      SET "status" = 'CANCELADO',
+          "cancelledAt" = NOW(),
+          "cancellationReason" = ${cleanReason},
+          "cancelledBy" = ${cleanActor},
+          "stockRestored" = true
+      WHERE "id" = ${id}
+        AND "status" IN ('PENDIENTE', 'CONFIRMADO', 'PREPARANDO')
+        AND "stockRestored" = false;
+    `
+
+    if (affected === 0) {
+      throw AppError.conflict('Conflicto concurrente al cancelar el pedido')
+    }
+
+    // Reponer stock ordenando determinísticamente para evitar deadlocks
+    const sortedItems = [...existing.items].sort((a, b) => {
+      const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
+      const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
+      return keyA.localeCompare(keyB)
+    })
+
+    for (const item of sortedItems) {
+      if (item.variantId) {
+        await tx.$executeRaw`
+          UPDATE "product_variants"
+          SET "stock" = "stock" + ${item.quantity}
+          WHERE "id" = ${item.variantId};
+        `
+      } else {
+        await tx.$executeRaw`
+          UPDATE "products"
+          SET "stock" = "stock" + ${item.quantity}
+          WHERE "id" = ${item.productId};
+        `
+      }
+    }
+
+    return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } })
+  })
+}
+
+export async function returnOrder(id: string, reason: string, actor: string = 'ADMIN') {
+  const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'Devolución de pedido'
+  const cleanActor = typeof actor === 'string' && actor.trim() ? actor.trim() : 'ADMIN'
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.order.findUnique({ where: { id }, include: { items: true } })
+    if (!existing) {
+      throw AppError.notFound('Pedido no encontrado')
+    }
+
+    if (existing.status === OrderStatus.DEVUELTO) {
+      throw AppError.conflict('El pedido ya ha sido devuelto previamente')
+    }
+
+    if (!canReturnOrder(existing.status as OrderStatus)) {
+      throw AppError.badRequest(
+        `Solo se pueden devolver pedidos en estado "${OrderStatus.ENTREGADO}". Estado actual: "${existing.status}".`
+      )
+    }
+
+    // Actualización atómica condicional para evitar doble devolución / concurrencia
+    const affected = await tx.$executeRaw`
+      UPDATE "orders"
+      SET "status" = 'DEVUELTO',
+          "returnedAt" = NOW(),
+          "returnReason" = ${cleanReason},
+          "returnedBy" = ${cleanActor},
+          "stockRestored" = true
+      WHERE "id" = ${id}
+        AND "status" = 'ENTREGADO'
+        AND "stockRestored" = false;
+    `
+
+    if (affected === 0) {
+      throw AppError.conflict('Conflicto concurrente al procesar la devolución del pedido')
+    }
+
+    // Reponer stock ordenando determinísticamente para evitar deadlocks
+    const sortedItems = [...existing.items].sort((a, b) => {
+      const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
+      const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
+      return keyA.localeCompare(keyB)
+    })
+
+    for (const item of sortedItems) {
+      if (item.variantId) {
+        await tx.$executeRaw`
+          UPDATE "product_variants"
+          SET "stock" = "stock" + ${item.quantity}
+          WHERE "id" = ${item.variantId};
+        `
+      } else {
+        await tx.$executeRaw`
+          UPDATE "products"
+          SET "stock" = "stock" + ${item.quantity}
+          WHERE "id" = ${item.productId};
+        `
+      }
+    }
+
+    return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } })
+  })
+}
+
+export async function advanceStatus(
+  id: string,
+  newStatus: OrderStatus,
+  reason?: string,
+  actor?: string
+) {
+  if (newStatus === OrderStatus.CANCELADO) {
+    return cancelOrder(id, reason || 'Cancelado por administración', actor || 'ADMIN')
+  }
+
+  if (newStatus === OrderStatus.DEVUELTO) {
+    return returnOrder(id, reason || 'Devolución procesada por administración', actor || 'ADMIN')
+  }
+
   const order = await prisma.order.findUniqueOrThrow({ where: { id } })
 
   // RN-006: validar transición secuencial
@@ -200,5 +425,5 @@ export async function advanceStatus(id: string, newStatus: OrderStatus) {
     throw AppError.badRequest(`Transición de estado inválida: ${order.status} → ${newStatus}`)
   }
 
-  return prisma.order.update({ where: { id }, data: { status: newStatus } })
+  return prisma.order.update({ where: { id }, data: { status: newStatus }, include: { items: true } })
 }

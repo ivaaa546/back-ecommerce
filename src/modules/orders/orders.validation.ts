@@ -2,6 +2,7 @@ import { AppError } from '../../lib/errors'
 
 export interface ValidatedOrderItem {
   productId: string
+  variantId?: string | null
   quantity: number
 }
 
@@ -90,6 +91,9 @@ export function validateCreateOrderPayload(payload: unknown): ValidatedOrderData
 
     const itemObj = item as Record<string, unknown>
     const productId = typeof itemObj.productId === 'string' ? itemObj.productId.trim() : ''
+    const variantId = typeof itemObj.variantId === 'string' && itemObj.variantId.trim()
+      ? itemObj.variantId.trim()
+      : undefined
     const rawQty = itemObj.quantity
 
     if (!productId) {
@@ -109,6 +113,7 @@ export function validateCreateOrderPayload(payload: unknown): ValidatedOrderData
 
     validatedItems.push({
       productId,
+      ...(variantId ? { variantId } : {}),
       quantity: rawQty,
     })
   }

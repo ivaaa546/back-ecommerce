@@ -7,9 +7,7 @@ const testUrl = baseUrl.includes('?')
   : `${baseUrl}?schema=test_isolated`
 
 // Las pruebas automatizadas deben cargar el Prisma singleton de la app contra el schema aislado.
-if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test') {
-  process.env.DATABASE_URL = testUrl
-}
+process.env.DATABASE_URL = testUrl
 
 // Cliente raíz en public para reiniciar el schema
 const rootPrisma = new PrismaClient({
@@ -21,19 +19,10 @@ export const testPrisma = new PrismaClient({
   datasources: { db: { url: testUrl } },
 })
 
-export async function resetAndSeedIsolatedDb() {
-  console.log('🔄 1. Reiniciando esquema aislado test_isolated...')
-  await rootPrisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS test_isolated CASCADE;`)
-  await rootPrisma.$executeRawUnsafe(`CREATE SCHEMA test_isolated;`)
-  
-  // Ejecutar migraciones completas (incluye secuencias, funciones y constraints)
-  const { execSync } = await import('node:child_process')
-  execSync(
-    `DATABASE_URL="${testUrl}" npx prisma migrate deploy`,
-    { stdio: 'inherit' }
-  )
+let isInitialized = false
 
-  console.log('🌱 2. Sembrando datos representativos en test_isolated...')
+async function seedData() {
+  console.log('🌱 Sembrando datos representativos en test_isolated...')
   
   // Settings
   await testPrisma.setting.create({
@@ -97,6 +86,55 @@ export async function resetAndSeedIsolatedDb() {
     },
   })
 
+  // Producto con variantes representativo (T-007, RF-015)
+  const prodWithVariants = await testPrisma.product.create({
+    data: {
+      id: 'test-prod-variants',
+      name: 'Playera Deportiva',
+      slug: 'playera-deportiva',
+      description: 'Playera transpirable con variantes de talla y color',
+      price: 120.0,
+      stock: 0, // En productos con variantes, el stock reside en las variantes
+      sku: 'PLAY-BASE',
+      imageUrl: 'https://res.cloudinary.com/demo/image/upload/sample.jpg',
+      images: ['https://res.cloudinary.com/demo/image/upload/sample.jpg'],
+      status: EntityStatus.ACTIVE,
+      featured: true,
+      categoryId: cat.id,
+      variants: {
+        create: [
+          {
+            id: 'test-var-1',
+            name: 'Talla M / Azul',
+            sku: 'PLAY-M-BLU',
+            price: 120.0,
+            stock: 10,
+            images: ['https://res.cloudinary.com/demo/image/upload/sample.jpg'],
+            status: EntityStatus.ACTIVE,
+          },
+          {
+            id: 'test-var-2',
+            name: 'Talla L / Rojo',
+            sku: 'PLAY-L-RED',
+            price: 130.0,
+            stock: 2,
+            images: [],
+            status: EntityStatus.ACTIVE,
+          },
+          {
+            id: 'test-var-3',
+            name: 'Talla XL / Negro',
+            sku: 'PLAY-XL-BLK',
+            price: 140.0,
+            stock: 0, // Sin stock para pruebas de stock insuficiente
+            images: [],
+            status: EntityStatus.ACTIVE,
+          },
+        ],
+      },
+    },
+  })
+
   // Pedido representativo
   await testPrisma.order.create({
     data: {
@@ -131,6 +169,44 @@ export async function resetAndSeedIsolatedDb() {
   `)
 
   console.log('✅ Ambiente aislado test_isolated reiniciado y sembrado exitosamente.')
+}
+
+export async function resetAndSeedIsolatedDb(force = false) {
+  if (isInitialized && !force) {
+    try {
+      await testPrisma.orderItem.deleteMany()
+      await testPrisma.order.deleteMany()
+      await testPrisma.productVariant.deleteMany()
+      await testPrisma.product.deleteMany()
+      await testPrisma.category.deleteMany()
+      await testPrisma.admin.deleteMany()
+      await testPrisma.setting.deleteMany()
+      await seedData()
+      return
+    } catch {
+      // Si la limpieza falló por desconexión del pooler, proceder con reinicio completo
+    }
+  }
+
+  console.log('🔄 1. Reiniciando esquema aislado test_isolated...')
+  await rootPrisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS test_isolated CASCADE;`)
+  await rootPrisma.$executeRawUnsafe(`CREATE SCHEMA test_isolated;`)
+  
+  // Ejecutar migraciones completas (incluye secuencias, funciones y constraints)
+  const { execSync } = await import('node:child_process')
+  execSync(
+    `DATABASE_URL="${testUrl}" npx prisma migrate deploy`,
+    { stdio: 'inherit' }
+  )
+
+  // Desconectar y reconectar testPrisma para limpiar conexiones cerradas por el pooler tras la migración
+  try {
+    await testPrisma.$disconnect()
+    await testPrisma.$connect()
+  } catch {}
+
+  await seedData()
+  isInitialized = true
 }
 
 async function main() {

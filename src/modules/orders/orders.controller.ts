@@ -30,7 +30,37 @@ export async function getById(req: Request, res: Response, next: NextFunction) {
 
 export async function advanceStatus(req: Request, res: Response, next: NextFunction) {
   try {
-    const order = await ordersService.advanceStatus(req.params.id as string, req.body.status)
+    const actor = (req as any).admin?.email || req.body.actor || 'ADMIN'
+    const order = await ordersService.advanceStatus(
+      req.params.id as string,
+      req.body.status,
+      req.body.reason,
+      actor
+    )
+    res.json(order)
+  } catch (err) { next(err) }
+}
+
+export async function cancelOrder(req: Request, res: Response, next: NextFunction) {
+  try {
+    const actor = (req as any).admin?.email || req.body.actor || 'ADMIN'
+    const order = await ordersService.cancelOrder(
+      req.params.id as string,
+      req.body.reason,
+      actor
+    )
+    res.json(order)
+  } catch (err) { next(err) }
+}
+
+export async function returnOrder(req: Request, res: Response, next: NextFunction) {
+  try {
+    const actor = (req as any).admin?.email || req.body.actor || 'ADMIN'
+    const order = await ordersService.returnOrder(
+      req.params.id as string,
+      req.body.reason,
+      actor
+    )
     res.json(order)
   } catch (err) { next(err) }
 }

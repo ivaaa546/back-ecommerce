@@ -2,7 +2,10 @@ import { OrderStatus } from './domain'
 
 export interface AuthoritativeOrderItem {
   productId: string
+  variantId?: string | null
   productName: string
+  variantName?: string | null
+  sku?: string | null
   quantity: number
   unitPrice: number
   lineTotal: number

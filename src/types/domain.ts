@@ -6,6 +6,8 @@ export enum OrderStatus {
   PREPARANDO = 'PREPARANDO',
   ENVIADO = 'ENVIADO',
   ENTREGADO = 'ENTREGADO',
+  CANCELADO = 'CANCELADO',
+  DEVUELTO = 'DEVUELTO',
 }
 
 export enum ShippingType {
@@ -30,3 +32,14 @@ export const ORDER_STATUS_SEQUENCE: OrderStatus[] = [
   OrderStatus.ENVIADO,
   OrderStatus.ENTREGADO,
 ]
+
+export interface ProductVariantDomain {
+  id: string
+  productId: string
+  name: string
+  sku: string
+  price: number | string
+  stock: number
+  images: string[]
+  status: EntityStatus
+}

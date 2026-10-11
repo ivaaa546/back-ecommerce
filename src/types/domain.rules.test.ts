@@ -30,6 +30,27 @@ describe('T-006: Consolidación de líneas y cálculo monetario', () => {
     assert.equal(itemC?.quantity, 5)
   })
 
+  it('T-004: consolida líneas con misma variante y separa líneas con distinta variante del mismo producto', () => {
+    const rawItems = [
+      { productId: 'prod-A', variantId: 'var-1', quantity: 2 },
+      { productId: 'prod-A', variantId: 'var-2', quantity: 1 },
+      { productId: 'prod-A', variantId: 'var-1', quantity: 3 },
+      { productId: 'prod-B', quantity: 4 },
+      { productId: 'prod-B', quantity: 2 },
+    ]
+
+    const consolidated = consolidateOrderItems(rawItems)
+    assert.equal(consolidated.length, 3)
+
+    const var1 = consolidated.find((i) => i.productId === 'prod-A' && i.variantId === 'var-1')
+    const var2 = consolidated.find((i) => i.productId === 'prod-A' && i.variantId === 'var-2')
+    const prodB = consolidated.find((i) => i.productId === 'prod-B')
+
+    assert.equal(var1?.quantity, 5) // 2 + 3
+    assert.equal(var2?.quantity, 1)
+    assert.equal(prodB?.quantity, 6) // 4 + 2
+  })
+
   it('no altera una lista de líneas únicas', () => {
     const rawItems = [
       { productId: 'prod-1', quantity: 1 },
@@ -82,5 +103,19 @@ describe('T-006: Consolidación de líneas y cálculo monetario', () => {
     assert.equal(canTransitionTo(OrderStatus.PENDIENTE, OrderStatus.ENVIADO), false)
     assert.equal(canTransitionTo(OrderStatus.ENTREGADO, OrderStatus.PENDIENTE), false)
     assert.equal(canTransitionTo(OrderStatus.CONFIRMADO, OrderStatus.CONFIRMADO), false)
+
+    // Cancelaciones válidas (antes de envío) e inválidas
+    assert.equal(canTransitionTo(OrderStatus.PENDIENTE, OrderStatus.CANCELADO), true)
+    assert.equal(canTransitionTo(OrderStatus.CONFIRMADO, OrderStatus.CANCELADO), true)
+    assert.equal(canTransitionTo(OrderStatus.PREPARANDO, OrderStatus.CANCELADO), true)
+    assert.equal(canTransitionTo(OrderStatus.ENVIADO, OrderStatus.CANCELADO), false)
+    assert.equal(canTransitionTo(OrderStatus.ENTREGADO, OrderStatus.CANCELADO), false)
+    assert.equal(canTransitionTo(OrderStatus.CANCELADO, OrderStatus.CANCELADO), false)
+
+    // Devoluciones válidas (solo desde entregado) e inválidas
+    assert.equal(canTransitionTo(OrderStatus.ENTREGADO, OrderStatus.DEVUELTO), true)
+    assert.equal(canTransitionTo(OrderStatus.ENVIADO, OrderStatus.DEVUELTO), false)
+    assert.equal(canTransitionTo(OrderStatus.PREPARANDO, OrderStatus.DEVUELTO), false)
+    assert.equal(canTransitionTo(OrderStatus.DEVUELTO, OrderStatus.ENTREGADO), false)
   })
 })

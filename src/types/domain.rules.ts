@@ -9,32 +9,67 @@ export function roundMoney(amount: number): number {
 }
 
 /**
- * Normaliza y consolida líneas de pedido repetidas por productId (DT-001, RF-032, RN-012).
- * Dos o más líneas con el mismo productId se unen sumando sus cantidades.
+ * Normaliza y consolida líneas de pedido repetidas por tupla (productId, variantId) (DT-001, DT-002, RF-007, RF-032, RN-012).
+ * Dos o más líneas con el mismo productId y la misma variante se unen sumando sus cantidades.
+ * Dos líneas con el mismo productId pero distinta variante permanecen separadas.
  */
-export function consolidateOrderItems<T extends { productId: string; quantity: number }>(
+export function consolidateOrderItems<T extends { productId: string; variantId?: string | null; quantity: number }>(
   items: T[]
-): Array<{ productId: string; quantity: number }> {
-  const map = new Map<string, number>()
+): Array<{ productId: string; variantId?: string | null; quantity: number }> {
+  const map = new Map<string, { productId: string; variantId?: string | null; quantity: number }>()
 
   for (const item of items) {
-    const existing = map.get(item.productId) ?? 0
-    map.set(item.productId, existing + item.quantity)
+    const vId = item.variantId ? item.variantId.trim() : (item.variantId === null ? null : undefined)
+    const key = `${item.productId}::${vId ?? ''}`
+    const existing = map.get(key)
+    if (existing) {
+      existing.quantity += item.quantity
+    } else {
+      map.set(key, {
+        productId: item.productId,
+        ...(vId !== undefined ? { variantId: vId } : {}),
+        quantity: item.quantity,
+      })
+    }
   }
 
-  const result: Array<{ productId: string; quantity: number }> = []
-  for (const [productId, quantity] of map.entries()) {
-    result.push({ productId, quantity })
-  }
+  return Array.from(map.values())
+}
 
-  return result
+/**
+ * Estados desde los cuales se puede cancelar un pedido con reposición de inventario.
+ */
+export const CANCELLABLE_STATUSES: OrderStatus[] = [
+  OrderStatus.PENDIENTE,
+  OrderStatus.CONFIRMADO,
+  OrderStatus.PREPARANDO,
+]
+
+export function canCancelOrder(status: OrderStatus): boolean {
+  return CANCELLABLE_STATUSES.includes(status)
+}
+
+export function canReturnOrder(status: OrderStatus): boolean {
+  return status === OrderStatus.ENTREGADO
 }
 
 /**
  * Verifica si la transición de estado de un pedido es válida (RN-006).
- * El estado solo puede avanzar en secuencia, nunca retroceder ni saltar pasos.
+ * Admite el avance secuencial normal, cancelaciones antes de envío y devoluciones desde entregado.
  */
 export function canTransitionTo(current: OrderStatus, next: OrderStatus): boolean {
+  if (current === OrderStatus.CANCELADO || current === OrderStatus.DEVUELTO) {
+    return false
+  }
+
+  if (next === OrderStatus.CANCELADO) {
+    return canCancelOrder(current)
+  }
+
+  if (next === OrderStatus.DEVUELTO) {
+    return canReturnOrder(current)
+  }
+
   const currentIndex = ORDER_STATUS_SEQUENCE.indexOf(current)
   const nextIndex = ORDER_STATUS_SEQUENCE.indexOf(next)
   return nextIndex === currentIndex + 1

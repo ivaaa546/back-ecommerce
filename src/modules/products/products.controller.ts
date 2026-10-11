@@ -69,3 +69,39 @@ export async function remove(req: Request, res: Response, next: NextFunction) {
     res.status(204).send()
   } catch (err) { next(err) }
 }
+
+// Endpoints de variantes (T-008, RF-001)
+export async function listVariants(req: Request, res: Response, next: NextFunction) {
+  try {
+    const variants = await productsService.listVariants(req.params.id as string)
+    res.json(variants)
+  } catch (err) { next(err) }
+}
+
+export async function createVariant(req: Request, res: Response, next: NextFunction) {
+  try {
+    const variant = await productsService.createVariant(req.params.id as string, req.body)
+    res.status(201).json(variant)
+  } catch (err) { next(err) }
+}
+
+export async function updateVariant(req: Request, res: Response, next: NextFunction) {
+  try {
+    const variant = await productsService.updateVariant(
+      req.params.id as string,
+      req.params.variantId as string,
+      req.body
+    )
+    res.json(variant)
+  } catch (err) { next(err) }
+}
+
+export async function deleteVariant(req: Request, res: Response, next: NextFunction) {
+  try {
+    await productsService.deleteVariant(
+      req.params.id as string,
+      req.params.variantId as string
+    )
+    res.status(204).send()
+  } catch (err) { next(err) }
+}
