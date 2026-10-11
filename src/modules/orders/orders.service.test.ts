@@ -3,15 +3,17 @@ import assert from 'node:assert/strict'
 import { EntityStatus } from '@prisma/client'
 import { resetAndSeedIsolatedDb, testPrisma } from '../../../scripts/setup-test-db'
 import { AppError } from '../../lib/errors'
-import type { createOrder as createOrderType } from './orders.service'
+import type { createOrder as createOrderType, advanceStatus as advanceStatusType } from './orders.service'
+import { OrderStatus } from '../../types/domain'
 
 let createOrder: typeof createOrderType
+let advanceStatus: typeof advanceStatusType
 
 describe('T-014, T-015, T-016: Servicio de Pedidos con Aislamiento y Concurrencia', () => {
   before(async () => {
     // Configura y siembra el esquema test_isolated antes de cargar servicios con Prisma singleton.
     await resetAndSeedIsolatedDb()
-    ;({ createOrder } = await import('./orders.service'))
+    ;({ createOrder, advanceStatus } = await import('./orders.service'))
   })
 
   it('T-014: Rechaza compra si un producto no existe y no modifica inventario', async () => {
@@ -104,9 +106,20 @@ describe('T-014, T-015, T-016: Servicio de Pedidos con Aislamiento y Concurrenci
     assert.equal(response.total, 480)
     assert.match(response.orderNumber, /^#\d{4,}$/)
 
-    // Comprobar persistencia en base de datos
+    // Comprobar persistencia en base de datos con reserva (Feature 005)
     const prod1After = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
-    assert.equal(prod1After.stock, initialStock - 3) // Descontadas exactamente 3 unidades
+    assert.equal(prod1After.stock, initialStock) // Stock físico conservado antes de despacho
+    assert.equal(prod1After.reservedStock, 3) // Reservadas exactamente 3 unidades
+    assert.equal(prod1After.stock - prod1After.reservedStock, initialStock - 3) // Disponible = 7
+
+    // Al avanzar a ENVIADO, se ejecuta la salida física definitiva (DT-004)
+    await advanceStatus(response.orderId, OrderStatus.CONFIRMADO)
+    await advanceStatus(response.orderId, OrderStatus.PREPARANDO)
+    await advanceStatus(response.orderId, OrderStatus.ENVIADO)
+
+    const prod1Dispatched = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
+    assert.equal(prod1Dispatched.stock, initialStock - 3) // Descontadas físicamente 3 unidades
+    assert.equal(prod1Dispatched.reservedStock, 0) // Reserva convertida en salida
 
     const savedOrder = await testPrisma.order.findUniqueOrThrow({
       where: { id: response.orderId },
@@ -114,11 +127,12 @@ describe('T-014, T-015, T-016: Servicio de Pedidos con Aislamiento y Concurrenci
     })
     assert.equal(savedOrder.items.length, 1)
     assert.equal(savedOrder.items[0].quantity, 3)
+    assert.equal(savedOrder.inventoryShipped, true)
   })
 
   it('T-015: Dos compradores concurrentes del último artículo: solo uno tiene éxito', async () => {
-    // Configurar stock del producto 2 a exactamente 1 unidad
-    await testPrisma.product.update({ where: { id: 'test-prod-2' }, data: { stock: 1 } })
+    // Configurar stock del producto 2 a exactamente 1 unidad y 0 reservas
+    await testPrisma.product.update({ where: { id: 'test-prod-2' }, data: { stock: 1, reservedStock: 0 } })
 
     const orderPayload = {
       address: { department: 'Guatemala', municipality: 'Guatemala', exactAddress: 'Zona 10' },
@@ -137,8 +151,9 @@ describe('T-014, T-015, T-016: Servicio de Pedidos con Aislamiento y Concurrenci
     assert.equal(successCount, 1, 'Exactamente una solicitud concurrente debe completarse')
     assert.equal(rejectedCount, 1, 'Exactamente una solicitud concurrente debe ser rechazada')
 
-    // El stock final debe ser exactamente 0, nunca negativo
+    // El disponible final debe ser exactamente 0 (stock 1 - reservado 1 = 0), sin sobreventa
     const prod2Final = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
-    assert.equal(prod2Final.stock, 0)
+    assert.equal(prod2Final.reservedStock, 1)
+    assert.equal(prod2Final.stock - prod2Final.reservedStock, 0)
   })
 })

@@ -5,12 +5,13 @@ import { AppError } from '../../lib/errors'
 
 let productsService: typeof import('./products.service')
 let createOrder: typeof import('../orders/orders.service').createOrder
+let advanceStatus: typeof import('../orders/orders.service').advanceStatus
 
 describe('T-012 y T-013: Variantes, Concurrencia, Stock y Regresión', () => {
   before(async () => {
     await resetAndSeedIsolatedDb()
     productsService = await import('./products.service')
-    ;({ createOrder } = await import('../orders/orders.service'))
+    ;({ createOrder, advanceStatus } = await import('../orders/orders.service'))
   })
 
   it('T-012: Creación y lectura de variantes asociadas a un producto', async () => {
@@ -124,12 +125,23 @@ describe('T-012 y T-013: Variantes, Concurrencia, Stock y Regresión', () => {
     assert.equal(order.items[0].lineTotal, 240.0)
 
     const var1After = await testPrisma.productVariant.findUniqueOrThrow({ where: { id: 'test-var-1' } })
-    assert.equal(var1After.stock, initialStock - 2)
+    assert.equal(var1After.stock, initialStock) // Con módulo de inventario (005), físico se conserva
+    assert.equal(var1After.reservedStock, 2) // Se reservan 2 unidades
+    assert.equal(var1After.stock - var1After.reservedStock, initialStock - 2) // Disponible = 8
+
+    // Al avanzar el ciclo a ENVIADO, se descuenta físicamente (DT-004)
+    await advanceStatus(order.orderId, 'CONFIRMADO' as any)
+    await advanceStatus(order.orderId, 'PREPARANDO' as any)
+    await advanceStatus(order.orderId, 'ENVIADO' as any)
+
+    const var1Dispatched = await testPrisma.productVariant.findUniqueOrThrow({ where: { id: 'test-var-1' } })
+    assert.equal(var1Dispatched.stock, initialStock - 2)
+    assert.equal(var1Dispatched.reservedStock, 0)
   })
 
   it('T-012: Dos compradores concurrentes del último artículo de una variante: solo uno tiene éxito y stock final es 0', async () => {
-    // Configurar stock de test-var-2 a exactamente 1 unidad
-    await testPrisma.productVariant.update({ where: { id: 'test-var-2' }, data: { stock: 1 } })
+    // Configurar stock de test-var-2 a exactamente 1 unidad y 0 reservas
+    await testPrisma.productVariant.update({ where: { id: 'test-var-2' }, data: { stock: 1, reservedStock: 0 } })
 
     const orderPayload = {
       address: { department: 'Guatemala', municipality: 'Guatemala', exactAddress: 'Zona 14' },
@@ -149,7 +161,8 @@ describe('T-012 y T-013: Variantes, Concurrencia, Stock y Regresión', () => {
     assert.equal(rejectedCount, 1, 'La segunda compra concurrente debe ser rechazada')
 
     const var2Final = await testPrisma.productVariant.findUniqueOrThrow({ where: { id: 'test-var-2' } })
-    assert.equal(var2Final.stock, 0, 'El stock final debe ser exactamente 0, sin sobreventa')
+    assert.equal(var2Final.reservedStock, 1)
+    assert.equal(var2Final.stock - var2Final.reservedStock, 0, 'El stock disponible debe ser 0')
   })
 
   it('T-013: Regresión de productos simples: comprar producto simple funciona y descuenta de products', async () => {
@@ -170,7 +183,18 @@ describe('T-012 y T-013: Variantes, Concurrencia, Stock y Regresión', () => {
     assert.equal(order.items[0].unitPrice, 250.5)
 
     const prod2After = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
-    assert.equal(prod2After.stock, initialStock - 1)
+    assert.equal(prod2After.stock, initialStock)
+    assert.equal(prod2After.reservedStock, 1)
+    assert.equal(prod2After.stock - prod2After.reservedStock, initialStock - 1)
+
+    // Al avanzar a ENVIADO, se produce salida física
+    await advanceStatus(order.orderId, 'CONFIRMADO' as any)
+    await advanceStatus(order.orderId, 'PREPARANDO' as any)
+    await advanceStatus(order.orderId, 'ENVIADO' as any)
+
+    const prod2Dispatched = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
+    assert.equal(prod2Dispatched.stock, initialStock - 1)
+    assert.equal(prod2Dispatched.reservedStock, 0)
   })
 
   it('Hallazgo 1 y 7: updateVariant y deleteVariant validan productId y tipos estrictos', async () => {

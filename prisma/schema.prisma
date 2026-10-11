@@ -24,6 +24,14 @@ enum OrderStatus {
   DEVUELTO
 }
 
+enum InventoryMovementType {
+  AJUSTE_MANUAL
+  RESERVA_PEDIDO
+  LIBERACION_PEDIDO
+  SALIDA_PEDIDO
+  REPOSICION_PEDIDO
+}
+
 enum ShippingType {
   FIXED
   FREE
@@ -67,6 +75,7 @@ model Product {
   price         Decimal      @db.Decimal(10, 2)
   previousPrice Decimal?     @db.Decimal(10, 2)
   stock         Int          @default(0)
+  reservedStock Int          @default(0)
   sku           String       @unique
   imageUrl      String
   images        String[]     @default([])
@@ -77,6 +86,7 @@ model Product {
   createdAt     DateTime         @default(now())
   orderItems    OrderItem[]
   variants      ProductVariant[]
+  inventoryMovements InventoryMovement[]
 
   @@index([slug])
   @@index([categoryId])
@@ -92,12 +102,14 @@ model ProductVariant {
   sku       String       @unique
   price     Decimal      @db.Decimal(10, 2)
   stock     Int          @default(0)
+  reservedStock Int      @default(0)
   images    String[]     @default([])
   status    EntityStatus @default(ACTIVE)
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
   orderItems OrderItem[]
+  inventoryMovements InventoryMovement[]
 
   @@index([productId])
   @@index([status])
@@ -135,6 +147,12 @@ model Order {
   returnReason       String?
   returnedBy         String?
   stockRestored      Boolean       @default(false)
+
+  // Inventario y Reservas (T-001, DT-001, DT-006)
+  inventoryReserved  Boolean       @default(false)
+  inventoryShipped   Boolean       @default(false)
+  inventoryReleased  Boolean       @default(false)
+  inventoryMovements InventoryMovement[]
 
   @@index([status])
   @@index([orderNumber])
@@ -187,3 +205,30 @@ model BannerSlide {
 
   @@map("banner_slides")
 }
+
+model InventoryMovement {
+  id                 String                @id @default(uuid())
+  type               InventoryMovementType
+  productId          String?
+  product            Product?              @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variantId          String?
+  variant            ProductVariant?       @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  sku                String
+  quantityChange     Int                   @default(0)
+  reservedChange     Int                   @default(0)
+  stockAfter         Int
+  reservedStockAfter Int
+  reason             String?
+  actor              String?
+  orderId            String?
+  order              Order?                @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  createdAt          DateTime              @default(now())
+
+  @@index([sku])
+  @@index([productId])
+  @@index([variantId])
+  @@index([orderId])
+  @@index([createdAt])
+  @@map("inventory_movements")
+}
+

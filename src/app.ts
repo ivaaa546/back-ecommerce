@@ -16,6 +16,7 @@ import { productsAdminRouter } from './modules/products/products.routes'
 import { ordersAdminRouter } from './modules/orders/orders.routes'
 import { settingsAdminRouter } from './modules/settings/settings.routes'
 import { uploadsRouter } from './modules/uploads/uploads.routes'
+import { inventoryAdminRouter } from './modules/inventory/inventory.routes'
 
 const app: Express = express()
 
@@ -40,6 +41,7 @@ app.use('/api/admin/products', productsAdminRouter)
 app.use('/api/admin/orders', ordersAdminRouter)
 app.use('/api/admin/settings', settingsAdminRouter)
 app.use('/api/admin/uploads', uploadsRouter)
+app.use('/api/admin/inventory', inventoryAdminRouter)
 
 // Error handler centralizado (debe ir al final)
 app.use(errorMiddleware)

@@ -174,6 +174,7 @@ async function seedData() {
 export async function resetAndSeedIsolatedDb(force = false) {
   if (isInitialized && !force) {
     try {
+      await testPrisma.inventoryMovement.deleteMany()
       await testPrisma.orderItem.deleteMany()
       await testPrisma.order.deleteMany()
       await testPrisma.productVariant.deleteMany()
@@ -189,15 +190,33 @@ export async function resetAndSeedIsolatedDb(force = false) {
   }
 
   console.log('🔄 1. Reiniciando esquema aislado test_isolated...')
-  await rootPrisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS test_isolated CASCADE;`)
-  await rootPrisma.$executeRawUnsafe(`CREATE SCHEMA test_isolated;`)
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await rootPrisma.$disconnect().catch(() => {})
+      await rootPrisma.$connect()
+      await rootPrisma.$executeRawUnsafe(`DROP SCHEMA IF EXISTS test_isolated CASCADE;`)
+      await rootPrisma.$executeRawUnsafe(`CREATE SCHEMA test_isolated;`)
+      break
+    } catch (err) {
+      if (attempt === 3) throw err
+      await new Promise((r) => setTimeout(r, 1000 * attempt))
+    }
+  }
   
   // Ejecutar migraciones completas (incluye secuencias, funciones y constraints)
   const { execSync } = await import('node:child_process')
-  execSync(
-    `DATABASE_URL="${testUrl}" npx prisma migrate deploy`,
-    { stdio: 'inherit' }
-  )
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      execSync(
+        `DATABASE_URL="${testUrl}" npx prisma migrate deploy`,
+        { stdio: 'inherit' }
+      )
+      break
+    } catch (err) {
+      if (attempt === 3) throw err
+      await new Promise((r) => setTimeout(r, 1500 * attempt))
+    }
+  }
 
   // Desconectar y reconectar testPrisma para limpiar conexiones cerradas por el pooler tras la migración
   try {

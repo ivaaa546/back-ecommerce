@@ -10,6 +10,12 @@ import {
 } from '../../types/domain.rules'
 import { AuthoritativeOrderResponse, AuthoritativeOrderItem } from '../../types/orders.contract'
 import { ValidatedOrderData } from './orders.validation'
+import {
+  reserveOrderInventory,
+  shipOrderInventory,
+  releaseOrderInventory,
+  restoreOrderInventory,
+} from '../inventory/inventory.service'
 
 /**
  * Genera el siguiente número de pedido único y creciente desde la secuencia de PostgreSQL (T-011, T-016, DT-003).
@@ -142,48 +148,7 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
       }
     }
 
-    // 3. T-015, DT-002, DT-003: Descuento atómico condicional de inventario dentro de la transacción
-    // Ordenar determinísticamente por ID para prevenir deadlocks en transacciones concurrentes con múltiples ítems (Hallazgo 2)
-    const sortedItemsForUpdate = [...preparedItems].sort((a, b) => {
-      const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
-      const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
-      return keyA.localeCompare(keyB)
-    })
-
-    // Cada UPDATE solo afecta una fila si el stock actual en base de datos es >= cantidad solicitada.
-    for (const item of sortedItemsForUpdate) {
-      if (item.variantId) {
-        const affectedRows = await tx.$executeRaw`
-          UPDATE "product_variants"
-          SET "stock" = "stock" - ${item.quantity}
-          WHERE "id" = ${item.variantId}
-            AND "stock" >= ${item.quantity}
-            AND "status" = 'ACTIVE';
-        `
-
-        if (affectedRows === 0) {
-          throw AppError.stockConflict(
-            `Conflicto de inventario concurrente: stock insuficiente para "${item.productName}"`
-          )
-        }
-      } else {
-        const affectedRows = await tx.$executeRaw`
-          UPDATE "products"
-          SET "stock" = "stock" - ${item.quantity}
-          WHERE "id" = ${item.productId}
-            AND "stock" >= ${item.quantity}
-            AND "status" = 'ACTIVE';
-        `
-
-        if (affectedRows === 0) {
-          throw AppError.stockConflict(
-            `Conflicto de inventario concurrente: stock insuficiente para "${item.productName}"`
-          )
-        }
-      }
-    }
-
-    // 4. Calcular importes autoritativos de servidor con precisión monetaria (T-006, DT-005)
+    // 3. Calcular importes autoritativos de servidor con precisión monetaria (T-006, DT-005)
     const itemsForCalculation = preparedItems.map((item) => ({
       unitPrice: item.unitPrice,
       quantity: item.quantity,
@@ -191,10 +156,10 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
 
     const { subtotal, total } = calculateOrderTotals(itemsForCalculation, shippingCost)
 
-    // 5. T-016: Generar número de pedido único y creciente
+    // 4. T-016: Generar número de pedido único y creciente
     const orderNumber = await generateOrderNumber(tx)
 
-    // 6. Persistir el pedido y las líneas consolidadas
+    // 5. Persistir el pedido y las líneas consolidadas
     const createdOrder = await tx.order.create({
       data: {
         orderNumber,
@@ -224,6 +189,20 @@ export async function createOrder(data: ValidatedOrderData): Promise<Authoritati
       },
       include: { items: true },
     })
+
+    // 6. T-003, DT-004, DT-005: Reserva atómica de inventario dentro de la transacción
+    await reserveOrderInventory(
+      tx,
+      createdOrder.id,
+      orderNumber,
+      preparedItems.map((item) => ({
+        productId: item.productId,
+        variantId: item.variantId,
+        productName: item.productName,
+        sku: item.sku,
+        quantity: item.quantity,
+      }))
+    )
 
     // 7. Retornar contrato autoritativo completo (T-008)
     const responseItems: AuthoritativeOrderItem[] = createdOrder.items.map((i) => ({
@@ -275,7 +254,7 @@ export async function getById(id: string) {
   return order
 }
 
-// Gestión de Cancelaciones y Devoluciones con reposición atómica de stock
+// Gestión de Cancelaciones y Devoluciones con ciclo de inventario (T-003, DT-004)
 export async function cancelOrder(id: string, reason: string, actor: string = 'ADMIN') {
   const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'Cancelación de pedido'
   const cleanActor = typeof actor === 'string' && actor.trim() ? actor.trim() : 'ADMIN'
@@ -296,45 +275,7 @@ export async function cancelOrder(id: string, reason: string, actor: string = 'A
       )
     }
 
-    // Actualización atómica condicional para evitar doble cancelación / concurrencia
-    const affected = await tx.$executeRaw`
-      UPDATE "orders"
-      SET "status" = 'CANCELADO',
-          "cancelledAt" = NOW(),
-          "cancellationReason" = ${cleanReason},
-          "cancelledBy" = ${cleanActor},
-          "stockRestored" = true
-      WHERE "id" = ${id}
-        AND "status" IN ('PENDIENTE', 'CONFIRMADO', 'PREPARANDO')
-        AND "stockRestored" = false;
-    `
-
-    if (affected === 0) {
-      throw AppError.conflict('Conflicto concurrente al cancelar el pedido')
-    }
-
-    // Reponer stock ordenando determinísticamente para evitar deadlocks
-    const sortedItems = [...existing.items].sort((a, b) => {
-      const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
-      const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
-      return keyA.localeCompare(keyB)
-    })
-
-    for (const item of sortedItems) {
-      if (item.variantId) {
-        await tx.$executeRaw`
-          UPDATE "product_variants"
-          SET "stock" = "stock" + ${item.quantity}
-          WHERE "id" = ${item.variantId};
-        `
-      } else {
-        await tx.$executeRaw`
-          UPDATE "products"
-          SET "stock" = "stock" + ${item.quantity}
-          WHERE "id" = ${item.productId};
-        `
-      }
-    }
+    await releaseOrderInventory(tx, id, cleanReason, cleanActor)
 
     return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } })
   })
@@ -360,45 +301,7 @@ export async function returnOrder(id: string, reason: string, actor: string = 'A
       )
     }
 
-    // Actualización atómica condicional para evitar doble devolución / concurrencia
-    const affected = await tx.$executeRaw`
-      UPDATE "orders"
-      SET "status" = 'DEVUELTO',
-          "returnedAt" = NOW(),
-          "returnReason" = ${cleanReason},
-          "returnedBy" = ${cleanActor},
-          "stockRestored" = true
-      WHERE "id" = ${id}
-        AND "status" = 'ENTREGADO'
-        AND "stockRestored" = false;
-    `
-
-    if (affected === 0) {
-      throw AppError.conflict('Conflicto concurrente al procesar la devolución del pedido')
-    }
-
-    // Reponer stock ordenando determinísticamente para evitar deadlocks
-    const sortedItems = [...existing.items].sort((a, b) => {
-      const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
-      const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
-      return keyA.localeCompare(keyB)
-    })
-
-    for (const item of sortedItems) {
-      if (item.variantId) {
-        await tx.$executeRaw`
-          UPDATE "product_variants"
-          SET "stock" = "stock" + ${item.quantity}
-          WHERE "id" = ${item.variantId};
-        `
-      } else {
-        await tx.$executeRaw`
-          UPDATE "products"
-          SET "stock" = "stock" + ${item.quantity}
-          WHERE "id" = ${item.productId};
-        `
-      }
-    }
+    await restoreOrderInventory(tx, id, cleanReason, cleanActor)
 
     return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } })
   })
@@ -418,12 +321,22 @@ export async function advanceStatus(
     return returnOrder(id, reason || 'Devolución procesada por administración', actor || 'ADMIN')
   }
 
-  const order = await prisma.order.findUniqueOrThrow({ where: { id } })
+  return prisma.$transaction(async (tx) => {
+    const order = await tx.order.findUniqueOrThrow({ where: { id } })
 
-  // RN-006: validar transición secuencial
-  if (!canTransitionTo(order.status as OrderStatus, newStatus)) {
-    throw AppError.badRequest(`Transición de estado inválida: ${order.status} → ${newStatus}`)
-  }
+    // RN-006: validar transición secuencial
+    if (!canTransitionTo(order.status as OrderStatus, newStatus)) {
+      throw AppError.badRequest(`Transición de estado inválida: ${order.status} → ${newStatus}`)
+    }
 
-  return prisma.order.update({ where: { id }, data: { status: newStatus }, include: { items: true } })
+    if (newStatus === OrderStatus.ENVIADO) {
+      await shipOrderInventory(tx, id)
+    }
+
+    return tx.order.update({
+      where: { id },
+      data: { status: newStatus },
+      include: { items: true },
+    })
+  })
 }

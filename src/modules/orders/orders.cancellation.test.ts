@@ -26,7 +26,9 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     })
 
     const prod2AfterBuy = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
-    assert.equal(prod2AfterBuy.stock, initialStock - 2) // 3
+    assert.equal(prod2AfterBuy.stock, initialStock) // Con reservas, el físico se conserva antes de despacho
+    assert.equal(prod2AfterBuy.reservedStock, 2) // 2 unidades reservadas
+    assert.equal(prod2AfterBuy.stock - prod2AfterBuy.reservedStock, initialStock - 2) // Disponible = 3
 
     // 3. Cancelar pedido
     const cancelled = await ordersService.cancelOrder(
@@ -41,9 +43,10 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     assert.ok(cancelled.cancelledAt)
     assert.equal(cancelled.stockRestored, true)
 
-    // 4. Verificar stock restaurado en tabla products
+    // 4. Verificar reservas liberadas en tabla products
     const prod2Final = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
-    assert.equal(prod2Final.stock, initialStock) // 5 (repuesto)
+    assert.equal(prod2Final.stock, initialStock) // Físico intacto
+    assert.equal(prod2Final.reservedStock, 0) // Reserva liberada (disponible vuelve a 5)
   })
 
   it('Cancela pedido de producto con variante y restaura stock en product_variants', async () => {
@@ -60,7 +63,9 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     })
 
     const var1AfterBuy = await testPrisma.productVariant.findUniqueOrThrow({ where: { id: 'test-var-1' } })
-    assert.equal(var1AfterBuy.stock, initialStock - 3) // 7
+    assert.equal(var1AfterBuy.stock, initialStock) // Con reservas, el físico se conserva antes de despacho
+    assert.equal(var1AfterBuy.reservedStock, 3) // 3 unidades reservadas
+    assert.equal(var1AfterBuy.stock - var1AfterBuy.reservedStock, initialStock - 3) // Disponible = 7
 
     // 3. Cancelar pedido
     const cancelled = await ordersService.cancelOrder(
@@ -74,9 +79,10 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     assert.equal(cancelled.cancelledBy, 'ADMIN_CARLOS')
     assert.equal(cancelled.stockRestored, true)
 
-    // 4. Verificar stock restaurado en product_variants
+    // 4. Verificar reservas liberadas en product_variants
     const var1Final = await testPrisma.productVariant.findUniqueOrThrow({ where: { id: 'test-var-1' } })
-    assert.equal(var1Final.stock, initialStock) // 10 (repuesto)
+    assert.equal(var1Final.stock, initialStock) // Físico intacto
+    assert.equal(var1Final.reservedStock, 0) // Reserva liberada (disponible vuelve a 10)
 
     // Snapshots históricos permanecen intactos
     assert.equal(cancelled.items[0].variantName, 'Talla M / Azul')
@@ -93,12 +99,13 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     })
 
     const prod1BeforeCancel = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
+    assert.equal(prod1BeforeCancel.reservedStock, 1)
 
     // Primera cancelación: éxito
     await ordersService.cancelOrder(order.orderId, 'Motivo 1', 'ADMIN')
 
     const prod1AfterCancel = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
-    assert.equal(prod1AfterCancel.stock, prod1BeforeCancel.stock + 1)
+    assert.equal(prod1AfterCancel.reservedStock, 0)
 
     // Segunda cancelación: debe fallar con AppError.conflict
     await assert.rejects(
@@ -108,9 +115,9 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
       (err: unknown) => err instanceof AppError && err.statusCode === 409
     )
 
-    // Stock no debe incrementarse de nuevo
+    // Reservas no deben alterarse de nuevo
     const prod1Final = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
-    assert.equal(prod1Final.stock, prod1AfterCancel.stock)
+    assert.equal(prod1Final.reservedStock, 0)
   })
 
   it('Concurrencia: dos cancelaciones simultáneas del mismo pedido solo ejecutan una reposición', async () => {
@@ -123,6 +130,7 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     })
 
     const prod1BeforeCancel = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
+    assert.equal(prod1BeforeCancel.reservedStock, 2)
 
     // Dos llamadas concurrentes para cancelar el mismo pedido
     const [res1, res2] = await Promise.allSettled([
@@ -136,9 +144,9 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
     assert.equal(successCount, 1, 'Exactamente una cancelación concurrente debe tener éxito')
     assert.equal(rejectedCount, 1, 'La segunda cancelación concurrente debe ser rechazada')
 
-    // El stock debe haberse incrementado exactamente en 2 unidades (una sola vez)
+    // La reserva debe haberse liberado exactamente en 2 unidades (a 0)
     const prod1Final = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-1' } })
-    assert.equal(prod1Final.stock, prod1BeforeCancel.stock + 2)
+    assert.equal(prod1Final.reservedStock, 0)
   })
 
   it('Rechaza cancelación en estados no reversibles (ENVIADO / ENTREGADO)', async () => {
