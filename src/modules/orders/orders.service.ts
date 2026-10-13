@@ -277,11 +277,23 @@ export async function cancelOrder(id: string, reason: string, actor: string = 'A
 
     await releaseOrderInventory(tx, id, cleanReason, cleanActor)
 
-    return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } })
+    return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true, returnItems: true } })
   })
 }
 
-export async function returnOrder(id: string, reason: string, actor: string = 'ADMIN') {
+export interface ReturnItemInput {
+  orderItemId: string
+  quantity: number
+  condition: 'APTO_VENTA' | 'DANADO' | 'INSPECCION'
+  restocked?: boolean
+}
+
+export async function returnOrder(
+  id: string,
+  reason: string,
+  actor: string = 'ADMIN',
+  returnItems?: ReturnItemInput[]
+) {
   const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'Devolución de pedido'
   const cleanActor = typeof actor === 'string' && actor.trim() ? actor.trim() : 'ADMIN'
 
@@ -297,13 +309,37 @@ export async function returnOrder(id: string, reason: string, actor: string = 'A
 
     if (!canReturnOrder(existing.status as OrderStatus)) {
       throw AppError.badRequest(
-        `Solo se pueden devolver pedidos en estado "${OrderStatus.ENTREGADO}". Estado actual: "${existing.status}".`
+        `Solo se pueden devolver pedidos en estado "${OrderStatus.ENTREGADO}" o "${OrderStatus.RETORNANDO}". Estado actual: "${existing.status}".`
       )
     }
 
-    await restoreOrderInventory(tx, id, cleanReason, cleanActor)
+    await restoreOrderInventory(tx, id, cleanReason, cleanActor, returnItems)
 
-    return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true } })
+    return tx.order.findUniqueOrThrow({ where: { id }, include: { items: true, returnItems: true } })
+  })
+}
+
+export async function markOrderReturning(id: string, reason: string, actor: string = 'ADMIN') {
+  const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'Paquete no entregado'
+  const cleanActor = typeof actor === 'string' && actor.trim() ? actor.trim() : 'ADMIN'
+
+  return prisma.$transaction(async (tx) => {
+    const order = await tx.order.findUnique({ where: { id } })
+    if (!order) throw AppError.notFound('Pedido no encontrado')
+    if (order.status !== OrderStatus.ENVIADO) {
+      throw AppError.badRequest(`Solo se puede iniciar el retorno desde "${OrderStatus.ENVIADO}"`)
+    }
+
+    return tx.order.update({
+      where: { id },
+      data: {
+        status: OrderStatus.RETORNANDO,
+        returningAt: new Date(),
+        returningReason: cleanReason,
+        returningBy: cleanActor,
+      },
+      include: { items: true },
+    })
   })
 }
 

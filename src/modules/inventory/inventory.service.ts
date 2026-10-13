@@ -759,7 +759,13 @@ export async function restoreOrderInventory(
   tx: PrismaTx,
   orderId: string,
   reason: string,
-  actor: string = 'ADMIN'
+  actor: string = 'ADMIN',
+  returnItems?: Array<{
+    orderItemId: string
+    quantity: number
+    condition: 'APTO_VENTA' | 'DANADO' | 'INSPECCION'
+    restocked?: boolean
+  }>
 ): Promise<void> {
   const order = await tx.order.findUnique({
     where: { id: orderId },
@@ -774,6 +780,34 @@ export async function restoreOrderInventory(
   const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'Devolución de pedido'
   const cleanActor = typeof actor === 'string' && actor.trim() ? actor.trim() : 'ADMIN'
 
+  const requestedItems = returnItems
+    ? returnItems
+    : order.items.map((item) => ({
+        orderItemId: item.id,
+        quantity: item.quantity,
+        condition: 'APTO_VENTA' as const,
+        restocked: true,
+      }))
+  if (requestedItems.length === 0) {
+    throw AppError.badRequest('La devolución debe incluir al menos una línea')
+  }
+  const orderItemsById = new Map(order.items.map((item) => [item.id, item]))
+  const seen = new Set<string>()
+
+  for (const requested of requestedItems) {
+    const item = orderItemsById.get(requested.orderItemId)
+    if (!item || seen.has(requested.orderItemId)) {
+      throw AppError.badRequest('La devolución contiene una línea de pedido inválida o duplicada')
+    }
+    if (!Number.isInteger(requested.quantity) || requested.quantity <= 0 || requested.quantity > item.quantity) {
+      throw AppError.badRequest(`La cantidad devuelta para "${item.productName}" no es válida`)
+    }
+    if (!['APTO_VENTA', 'DANADO', 'INSPECCION'].includes(requested.condition)) {
+      throw AppError.badRequest('La condición del producto devuelto no es válida')
+    }
+    seen.add(requested.orderItemId)
+  }
+
   const affected = await tx.$executeRaw`
     UPDATE "orders"
     SET "status" = 'DEVUELTO',
@@ -782,24 +816,42 @@ export async function restoreOrderInventory(
         "returnedBy" = ${cleanActor},
         "stockRestored" = true
     WHERE "id" = ${orderId}
-      AND "status" = 'ENTREGADO'
+       AND "status" IN ('ENTREGADO', 'RETORNANDO')
       AND "stockRestored" = false;
   `
   if (affected === 0) {
     throw AppError.conflict('Conflicto concurrente al procesar la devolución del pedido')
   }
 
-  const sorted = [...order.items].sort((a, b) => {
-    const keyA = a.variantId ? `var:${a.variantId}` : `prod:${a.productId}`
-    const keyB = b.variantId ? `var:${b.variantId}` : `prod:${b.productId}`
+  const selectedItems = requestedItems.map((requested) => ({
+    requested,
+    item: orderItemsById.get(requested.orderItemId)!,
+  }))
+  const sorted = selectedItems.sort((a, b) => {
+    const keyA = a.item.variantId ? `var:${a.item.variantId}` : `prod:${a.item.productId}`
+    const keyB = b.item.variantId ? `var:${b.item.variantId}` : `prod:${b.item.productId}`
     return keyA.localeCompare(keyB)
   })
 
-  for (const item of sorted) {
+  for (const { item, requested } of sorted) {
+    const shouldRestock = requested.condition === 'APTO_VENTA' && requested.restocked !== false
+    await tx.returnItem.create({
+      data: {
+        orderId,
+        productId: item.productId,
+        variantId: item.variantId,
+        sku: item.sku || (item.variantId ? (await tx.productVariant.findUniqueOrThrow({ where: { id: item.variantId } })).sku : (await tx.product.findUniqueOrThrow({ where: { id: item.productId } })).sku),
+        quantity: requested.quantity,
+        condition: requested.condition,
+        restocked: shouldRestock,
+        reason: cleanReason,
+      },
+    })
+    if (!shouldRestock) continue
     if (item.variantId) {
       await tx.$executeRaw`
         UPDATE "product_variants"
-        SET "stock" = "stock" + ${item.quantity}
+        SET "stock" = "stock" + ${requested.quantity}
         WHERE "id" = ${item.variantId};
       `
 
@@ -813,7 +865,7 @@ export async function restoreOrderInventory(
           productId: item.productId,
           variantId: item.variantId,
           sku: item.sku || updated.sku,
-          quantityChange: item.quantity,
+           quantityChange: requested.quantity,
           reservedChange: 0,
           stockAfter: updated.stock,
           reservedStockAfter: updated.reservedStock,
@@ -825,7 +877,7 @@ export async function restoreOrderInventory(
     } else {
       await tx.$executeRaw`
         UPDATE "products"
-        SET "stock" = "stock" + ${item.quantity}
+        SET "stock" = "stock" + ${requested.quantity}
         WHERE "id" = ${item.productId};
       `
 
@@ -839,7 +891,7 @@ export async function restoreOrderInventory(
           productId: item.productId,
           variantId: null,
           sku: item.sku || updated.sku,
-          quantityChange: item.quantity,
+           quantityChange: requested.quantity,
           reservedChange: 0,
           stockAfter: updated.stock,
           reservedStockAfter: updated.reservedStock,

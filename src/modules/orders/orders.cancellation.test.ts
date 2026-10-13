@@ -255,4 +255,62 @@ describe('Fase 4: Cancelaciones, Devoluciones y Reposición de Stock', () => {
       (err: unknown) => err instanceof AppError && err.statusCode === 409
     )
   })
+
+  it('Procesa devolución parcial y no repone unidades dañadas', async () => {
+    const before = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
+    const order = await ordersService.createOrder({
+      customer: { fullName: 'Cliente Devolución Parcial', phone: '11223344' },
+      address: { department: 'Guatemala', municipality: 'Guatemala', exactAddress: 'Zona 14' },
+      paymentMethod: 'CASH_ON_DELIVERY',
+      items: [{ productId: 'test-prod-2', quantity: 2 }],
+    })
+
+    await ordersService.advanceStatus(order.orderId, OrderStatus.CONFIRMADO)
+    await ordersService.advanceStatus(order.orderId, OrderStatus.PREPARANDO)
+    await ordersService.advanceStatus(order.orderId, OrderStatus.ENVIADO)
+    await ordersService.advanceStatus(order.orderId, OrderStatus.ENTREGADO)
+
+    const delivered = await ordersService.getById(order.orderId)
+    const returned = await ordersService.returnOrder(
+      order.orderId,
+      'Una unidad llegó dañada',
+      'ADMIN_RETURNS',
+      [{ orderItemId: delivered.items[0].id, quantity: 1, condition: 'DANADO', restocked: false }]
+    )
+
+    const after = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
+    assert.equal(returned.status, OrderStatus.DEVUELTO)
+    assert.equal(after.stock, before.stock - 2)
+    assert.equal(returned.returnItems.length, 1)
+    assert.equal(returned.returnItems[0].restocked, false)
+  })
+
+  it('Marca retorno por no entrega sin reponer hasta recibir el paquete', async () => {
+    const before = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
+    const order = await ordersService.createOrder({
+      customer: { fullName: 'Cliente Retorno Transportadora', phone: '55667788' },
+      address: { department: 'Guatemala', municipality: 'Guatemala', exactAddress: 'Zona 15' },
+      paymentMethod: 'CASH_ON_DELIVERY',
+      items: [{ productId: 'test-prod-2', quantity: 1 }],
+    })
+
+    await ordersService.advanceStatus(order.orderId, OrderStatus.CONFIRMADO)
+    await ordersService.advanceStatus(order.orderId, OrderStatus.PREPARANDO)
+    await ordersService.advanceStatus(order.orderId, OrderStatus.ENVIADO)
+    const returning = await ordersService.markOrderReturning(order.orderId, 'Cliente ausente', 'ADMIN_LOGISTICA')
+    assert.equal(returning.status, OrderStatus.RETORNANDO)
+
+    const afterMarking = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
+    assert.equal(afterMarking.stock, before.stock - 1)
+
+    const returned = await ordersService.returnOrder(
+      order.orderId,
+      'Paquete recibido por la tienda',
+      'ADMIN_LOGISTICA',
+      [{ orderItemId: returning.items[0].id, quantity: 1, condition: 'APTO_VENTA', restocked: true }]
+    )
+    const afterReceipt = await testPrisma.product.findUniqueOrThrow({ where: { id: 'test-prod-2' } })
+    assert.equal(returned.status, OrderStatus.DEVUELTO)
+    assert.equal(afterReceipt.stock, before.stock)
+  })
 })

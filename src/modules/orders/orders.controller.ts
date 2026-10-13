@@ -59,8 +59,17 @@ export async function returnOrder(req: Request, res: Response, next: NextFunctio
     const order = await ordersService.returnOrder(
       req.params.id as string,
       req.body.reason,
-      actor
+      actor,
+      req.body.items
     )
+    res.json(order)
+  } catch (err) { next(err) }
+}
+
+export async function markReturning(req: Request, res: Response, next: NextFunction) {
+  try {
+    const actor = (req as any).admin?.email || req.body.actor || 'ADMIN'
+    const order = await ordersService.markOrderReturning(req.params.id as string, req.body.reason, actor)
     res.json(order)
   } catch (err) { next(err) }
 }

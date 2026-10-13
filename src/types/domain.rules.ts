@@ -50,7 +50,7 @@ export function canCancelOrder(status: OrderStatus): boolean {
 }
 
 export function canReturnOrder(status: OrderStatus): boolean {
-  return status === OrderStatus.ENTREGADO
+  return status === OrderStatus.ENTREGADO || status === OrderStatus.RETORNANDO
 }
 
 /**
